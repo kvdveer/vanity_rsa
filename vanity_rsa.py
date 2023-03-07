@@ -1,6 +1,7 @@
 import argparse
 import os
 import random
+import logging
 
 import cryptography.hazmat.backends
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -12,6 +13,9 @@ BACKEND = cryptography.hazmat.backends.default_backend()
 BASE64_CHARS = (b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
                 b"abcdefghijklmnopqrstuvwxyz"
                 b"0123456789/+")
+
+
+logging.basicConfig(level=logging.DEBUG)
 
 
 def close_prime(n):
@@ -35,6 +39,7 @@ def close_prime(n):
         offset += 2
 
     return random.choice(near_primes)
+
 
 try:
     from gmpy2 import is_prime
@@ -67,6 +72,8 @@ def inject_vanity_ssh(priv_key, vanity):
     """Embed the vanity text in an SSH-format public key
 
     This key is likely not a valid key, though."""
+
+    logging.debug("Injecting ssh vanity")
     vanity = vanity.encode()
     assert all(c in BASE64_CHARS for c in vanity)
 
@@ -97,6 +104,7 @@ def inject_vanity_pem(priv_key, vanity):
     """Embed the vanity text in an PEM-format public key
 
     This key is likely not a valid key, though."""
+    logging.debug("Injecting pem vanity")
     vanity = vanity.encode()
     assert all(c in BASE64_CHARS for c in vanity)
 
@@ -157,7 +165,9 @@ def show_key_pem(key):
 
 def test_key(key):
     """Encrypt some text with the key to make sure it actually works"""
-    
+
+    logging.debug("Testing the key…")
+
     # test encryption
     msg = b"This is a test"
     pad = padding.OAEP(
@@ -188,8 +198,11 @@ def test_key(key):
         hashes.SHA256()
     )
 
+
 def make_valid_rsa_key(priv_key, pub_key):
     """Generate a valid private key, with N close to the N from pub_key"""
+
+    logging.debug("Generating an RSA key…")
 
     # Attempt to make the key valid by finding a Q which multiplies with P to
     # form something close to N
@@ -207,18 +220,19 @@ def make_valid_rsa_key(priv_key, pub_key):
 
     return rsa.RSAPrivateNumbers(
         public_numbers=rsa.RSAPublicNumbers(e, p * q),
-        p=p, q=q, 
+        p=p, q=q,
         d=rsa.rsa_crt_iqmp(phi, e),
         dmp1=rsa.rsa_crt_dmp1(e, p),
         dmq1=rsa.rsa_crt_dmp1(e, q),
         iqmp=rsa.rsa_crt_iqmp(p, q),
-    ).private_key(BACKEND)
+    ).private_key(BACKEND, unsafe_skip_rsa_key_validation=True)
 
 
 def make_key(vanity, key_length=1024, key_format='ssh'):
     """Generate a valid key with the specified vanity string"""
     # Generate a key to start with. This way we inherit several of the wise
     # choices made by the cryptography authors. (mostly on P selection)
+    logging.info(f"Generating {key_format} key of length {key_length}")
     priv_key = rsa.generate_private_key(65537, key_length, BACKEND)
 
     # Apply some vanity
@@ -250,41 +264,49 @@ def main():
     args = parser.parse_args()
     key_format = args.key_format.lower()
 
+    logging.info("Making a key…")
     # Get the key
-    key = make_key(args.vanity, key_length=args.key_length, 
+    key = make_key(args.vanity, key_length=args.key_length,
                    key_format=key_format)
-    
+
+    logging.info("Testing the key…")
     # Make sure the key actually works
     test_key(key)
 
     # Encode the key
-    
+
     if key_format == 'pem':
-        priv_key_bytes, pub_key_bytes  = show_key_pem(key)
+        logging.info("Encoding the key as pem…")
+        priv_key_bytes, pub_key_bytes = show_key_pem(key)
     elif key_format == 'ssh':
+        logging.info("Encoding the key as ssh…")
         priv_key_bytes, pub_key_bytes = show_key_ssh(key)
     else:
-        assert False, 'unknown key type'    
+        assert False, 'unknown key type'
 
     if args.output_file:
         priv_path = os.path.expanduser(args.output_file)
         if args.output_file_public:
             pub_path = os.path.expanduser(args.output_file_public)
-        else: 
+        else:
             pub_path = priv_path + ".pub"
+
+        logging.info(
+            f"Writing private and public keys to {priv_path} and {pub_path}")
 
         with open(priv_path, 'wb') as f:
             f.write(priv_key_bytes)
         os.chmod(priv_path, 0o600)  # Make sure the key is safe
         with open(pub_path, 'wb') as f:
             f.write(pub_key_bytes)
-        print('Your private key has been stored at %s' % args.output_file)
+        logging.info("Keys written.")
+
     else:
         # If the user didn't provide a save path, show the user the result
         print(priv_key_bytes.decode())
-    
+
     print(pub_key_bytes.decode())
-    print('\nMake sure to add password to your private key!')
+    logging.info('Make sure to add password to your private key!')
 
 
 if __name__ == '__main__':
